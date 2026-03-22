@@ -1,293 +1,261 @@
-# IronHQ
-
-Professional strength coaching platform. Built for coaches and athletes who are serious about performance tracking.
-
----
-
-## Stack
-
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 14 (App Router) |
-| Database | Supabase (PostgreSQL) |
-| Auth | Supabase GoTrue (magic link) |
-| Styling | Tailwind CSS |
-| Drag & Drop | @dnd-kit/core |
-| Data Fetching | @tanstack/react-query |
-| Language | TypeScript |
-
----
-
-## Architecture
-
-**Two separate UX layers:**
-
-- **Coach Layer** (`/architect`, `/roster`, `/comms`) — laptop-first, high-density desktop interface
-- **Athlete Layer** (`/logger`, `/history`) — mobile-first, high-contrast, optimised for gym floor use
-
-**Core rules:**
-
-- `profiles.id` is the universal identity anchor (1:1 with `auth.users`)
-- Planned training and actual logged training live in entirely separate tables
-- All multi-table writes go through PostgreSQL `SECURITY DEFINER` RPCs
-- Every business table has Row Level Security enabled with club-scoped policies
-
----
-
-## Project Structure
-
-```
-ironhq/
-├── app/
-│   ├── (auth)/
-│   │   ├── login/page.tsx
-│   │   └── onboarding/page.tsx
-│   ├── (coach)/
-│   │   ├── layout.tsx
-│   │   ├── architect/page.tsx
-│   │   ├── roster/page.tsx
-│   │   └── comms/page.tsx
-│   ├── (athlete)/
-│   │   ├── layout.tsx
-│   │   ├── logger/page.tsx
-│   │   └── history/page.tsx
-│   ├── auth/callback/route.ts
-│   ├── layout.tsx
-│   ├── page.tsx
-│   └── globals.css
-├── components/
-│   ├── architect/      # Coach workout builder components
-│   ├── roster/         # Compliance table and delta panel
-│   ├── comms/          # Noticeboard and messaging
-│   └── logger/         # Athlete set logging
-├── utils/
-│   └── supabase/
-│       └── client.ts
-├── supabase/
-│   ├── migrations/
-│   │   ├── 00001_schema.sql
-│   │   ├── 00002_rls.sql
-│   │   ├── 00003_rpcs.sql
-│   │   └── 00004_views.sql
-│   └── seed.sql
-├── middleware.ts
-├── next.config.ts
-├── tailwind.config.ts
-└── tsconfig.json
-```
-
----
-
-## Local Development Setup
-
-### Prerequisites
-
-- Node.js 20+
-- npm or pnpm
-- [Supabase CLI](https://supabase.com/docs/guides/cli/getting-started)
-- Docker Desktop (required for Supabase local)
-
-### Step 1 — Install dependencies
-
-```bash
-npm install
-```
-
-### Step 2 — Set up Supabase locally
-
-```bash
-# Initialise (skip if supabase/ folder already exists)
-npx supabase init
-
-# Start local Supabase instance (requires Docker)
-npx supabase start
-```
-
-This starts Supabase locally at:
-- **Studio**: http://localhost:54323
-- **API**: http://localhost:54321
-- **Inbucket (email)**: http://localhost:54324
-
-### Step 3 — Configure environment variables
-
-```bash
-cp .env.example .env.local
-```
-
-Fill in `.env.local` with the values printed by `npx supabase start`:
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key from supabase start output>
-SUPABASE_SERVICE_ROLE_KEY=<service role key from supabase start output>
-NEXT_PUBLIC_SITE_URL=http://localhost:3000
-```
-
-### Step 4 — Run migrations
-
-```bash
-npx supabase db push
-```
-
-This applies all four migrations in order:
-1. `00001_schema.sql` — tables, indexes, triggers, PR detection
-2. `00002_rls.sql` — RLS enablement and all policies
-3. `00003_rpcs.sql` — all RPCs
-4. `00004_views.sql` — analytics views
-
-### Step 5 — Create test users
-
-1. Open Supabase Studio → http://localhost:54323
-2. Go to **Authentication → Users → Add user**
-3. Create: `coach@ironhq.local` (confirm email immediately)
-4. Create: `athlete@ironhq.local` (confirm email immediately)
-5. Copy both UUIDs from the Users table
-
-### Step 6 — Seed the database
-
-Open `supabase/seed.sql`, paste the UUIDs at the top:
-
-```sql
-v_coach_id   UUID := 'paste-coach-uuid-here';
-v_athlete_id UUID := 'paste-athlete-uuid-here';
-```
-
-Then run the seed script in **Studio → SQL Editor**.
-
-You should see: `✅ Seed complete. Club: ..., Coach: ..., Athlete: ...`
-
-### Step 7 — Generate TypeScript types
-
-```bash
-npm run types:supabase
-```
-
-This generates `src/types/supabase.ts` with full type coverage for all tables and views.
-
-### Step 8 — Start the dev server
-
-```bash
-npm run dev
-```
-
-Open http://localhost:3000
-
----
-
-## Testing the full flow
-
-### As a coach
-
-1. Go to http://localhost:3000/login
-2. Enter `coach@ironhq.local`
-3. Open Inbucket at http://localhost:54324 to get the magic link
-4. Click the link → you land on `/architect`
-5. Drag exercises from the library into the builder
-6. Select an athlete, pick a date, click **Assign Workout**
-
-### As an athlete
-
-1. Open a new incognito window
-2. Go to http://localhost:3000/login
-3. Enter `athlete@ironhq.local`
-4. Get the link from Inbucket
-5. Click → you land on `/logger`
-6. Click **Start Workout** → log sets → click **Complete Workout**
-
-### Verify PRs
-
-After completing a workout, go to `/history` as the athlete. If any sets were heavier than previous bests, a PR entry will appear in the timeline. The PR detection runs automatically via the PostgreSQL trigger.
-
-### Verify delta
-
-Go back to the coach window → `/roster`. Click the athlete row. The delta panel shows planned vs actual volume for each exercise.
-
----
-
-## Invite flow
-
-To test the invite flow (rather than seeding directly):
-
-```sql
--- Run in SQL Editor as the coach
-INSERT INTO invites (club_id, invited_email, intended_role, expires_at)
-VALUES (
-  '<your-club-id-from-seed>',
-  'newathelete@ironhq.local',
-  'athlete',
-  NOW() + INTERVAL '7 days'
-);
-
--- Get the invite token
-SELECT invite_token FROM invites WHERE invited_email = 'newathlete@ironhq.local';
-```
-
-Then go to:
-```
-http://localhost:3000/auth/callback?invite_token=<token>
-```
-
-After signing up with magic link, the user hits `/onboarding`, enters their name, and is routed to `/logger`.
-
----
-
-## Deployment (Supabase Cloud + Vercel)
-
-### Database
-
-```bash
-# Link to your remote project
-npx supabase link --project-ref YOUR_PROJECT_REF
-
-# Push migrations to production
-npx supabase db push
-```
-
-### Environment variables (Vercel)
-
-Add these in Vercel → Project Settings → Environment Variables:
-
-| Variable | Value |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Your project URL from Supabase Dashboard |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key from Supabase Dashboard |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (mark as sensitive) |
-| `NEXT_PUBLIC_SITE_URL` | Your production domain e.g. `https://app.ironhq.com` |
-
-### Supabase Auth redirect URL
-
-In Supabase Dashboard → Authentication → URL Configuration:
-
-- **Site URL**: `https://app.ironhq.com`
-- **Redirect URLs**: `https://app.ironhq.com/auth/callback`
-
----
-
-## Known issues and notes
-
-| Issue | Status | Notes |
-|---|---|---|
-| `coach_roster_compliance` athletes with zero workouts | Fixed in `00004_views.sql` | Uses `cm.club_id` not `aw.club_id` |
-| Onboarding `useSearchParams` Suspense boundary | Fixed in `onboarding/page.tsx` | Wrapped in `<Suspense>` |
-| Roster table invalid Tailwind classes | Fixed in `RosterClient.tsx` | Explicit `col-span-*` values |
-| `coach_delta_report` view bypasses RLS | Mitigated | Server component always filters by `club_id`. Direct API access is unprotected — add `security_invoker` for extra hardening |
-| Middleware fetches profile on every request | Known | Acceptable at MVP scale. Long-term fix: store `primary_role` in JWT claims |
-| Coach nav uses text icons | Known | Swap for `lucide-react` icons when polishing UI |
-| No `loading.tsx` skeleton screens | Known | Add per-route loading states for production |
-
----
-
-## Sprint roadmap
-
-| Phase | Status | Description |
-|---|---|---|
-| 1 — Foundation | ✅ Done | Schema, RLS, RPCs, migrations |
-| 2A — Architect | ✅ Done | Coach workout builder |
-| 2B — Auth | ✅ Done | Login, invite, onboarding |
-| 2C — Logger | ✅ Done | Athlete set logging |
-| 2D — Roster / Delta | ✅ Done | Compliance table, planned vs actual |
-| 3 — Comms | ✅ Done | Noticeboard, direct messaging |
-| 4 — Billing toggle | ✅ Done | Manual billing status on roster |
-| 5 — Multi-week programs | Not started | Full program template builder UI |
-| 6 — Payment integration | Not started | Business model TBD |
-| 7 — Admin panel | Not started | Support and troubleshooting interface |
+-- ============================================================
+-- IronHQ Migration 00005 — Program Template RPCs
+-- Run after 00004_views.sql
+-- These RPCs power the multi-week Program Builder UI.
+-- ============================================================
+
+-- ============================================================
+-- RPC: save_program_template
+-- Creates or updates a full program template including
+-- weeks, slots, and workout template references.
+-- Accepts a JSONB payload representing the entire program grid.
+-- Idempotent: pass p_template_id to update, NULL to create.
+--
+-- Payload shape:
+-- {
+--   name: string,
+--   total_weeks: number,
+--   default_rounding_increment: number,
+--   weeks: [
+--     {
+--       week_number: number,
+--       phase_name: string | null,
+--       slots: [
+--         { day_index: number, workout_template_id: string | null, slot_label: string | null }
+--       ]
+--     }
+--   ]
+-- }
+-- ============================================================
+CREATE OR REPLACE FUNCTION save_program_template(
+  p_club_id       UUID,
+  p_template_id   UUID,        -- NULL = create new
+  p_payload       JSONB
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_template_id UUID;
+  v_week        JSONB;
+  v_week_id     UUID;
+  v_slot        JSONB;
+  v_name        TEXT;
+  v_weeks       INT;
+  v_increment   NUMERIC;
+BEGIN
+  -- Auth check
+  IF NOT is_active_coach(p_club_id) THEN
+    RAISE EXCEPTION 'Unauthorized: not an active coach in this club';
+  END IF;
+
+  -- Extract top-level fields
+  v_name      := trim(p_payload->>'name');
+  v_weeks     := (p_payload->>'total_weeks')::INT;
+  v_increment := COALESCE((p_payload->>'default_rounding_increment')::NUMERIC, 2.5);
+
+  IF v_name IS NULL OR v_name = '' THEN
+    RAISE EXCEPTION 'Validation error: program name cannot be blank';
+  END IF;
+
+  IF v_weeks IS NULL OR v_weeks < 1 OR v_weeks > 52 THEN
+    RAISE EXCEPTION 'Validation error: total_weeks must be between 1 and 52';
+  END IF;
+
+  IF p_template_id IS NOT NULL THEN
+    -- Update existing — verify it belongs to this club
+    UPDATE program_templates
+    SET
+      name                        = v_name,
+      total_weeks                 = v_weeks,
+      default_rounding_increment  = v_increment
+    WHERE id       = p_template_id
+      AND club_id  = p_club_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Program template not found or does not belong to this club';
+    END IF;
+
+    v_template_id := p_template_id;
+
+    -- Delete existing weeks (cascades to slots)
+    DELETE FROM program_weeks WHERE program_template_id = v_template_id;
+
+  ELSE
+    -- Create new
+    INSERT INTO program_templates (
+      club_id,
+      created_by_profile_id,
+      name,
+      total_weeks,
+      default_rounding_increment
+    ) VALUES (
+      p_club_id,
+      auth.uid(),
+      v_name,
+      v_weeks,
+      v_increment
+    )
+    RETURNING id INTO v_template_id;
+  END IF;
+
+  -- Insert weeks and slots from payload
+  FOR v_week IN SELECT * FROM jsonb_array_elements(p_payload->'weeks') LOOP
+    INSERT INTO program_weeks (
+      program_template_id,
+      week_number,
+      phase_name
+    ) VALUES (
+      v_template_id,
+      (v_week->>'week_number')::INT,
+      NULLIF(trim(v_week->>'phase_name'), '')
+    )
+    RETURNING id INTO v_week_id;
+
+    -- Insert slots for this week
+    FOR v_slot IN SELECT * FROM jsonb_array_elements(v_week->'slots') LOOP
+      INSERT INTO program_week_slots (
+        program_week_id,
+        workout_template_id,
+        day_index,
+        slot_label
+      ) VALUES (
+        v_week_id,
+        NULLIF((v_slot->>'workout_template_id'), '')::UUID,
+        (v_slot->>'day_index')::INT,
+        NULLIF(trim(v_slot->>'slot_label'), '')
+      )
+      ON CONFLICT (program_week_id, day_index) DO UPDATE
+        SET workout_template_id = EXCLUDED.workout_template_id,
+            slot_label          = EXCLUDED.slot_label;
+    END LOOP;
+  END LOOP;
+
+  RETURN v_template_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION save_program_template(UUID, UUID, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION save_program_template(UUID, UUID, JSONB) TO authenticated;
+
+-- ============================================================
+-- RPC: save_workout_template
+-- Creates or replaces a named workout template with exercises.
+-- Used by the Program Builder to manage the exercise library
+-- attached to specific days in the program grid.
+-- ============================================================
+CREATE OR REPLACE FUNCTION save_workout_template(
+  p_club_id     UUID,
+  p_template_id UUID,   -- NULL = create new
+  p_name        TEXT,
+  p_exercises   JSONB   -- [{exercise_id, sort_order, planned_sets, planned_reps, planned_load_value}]
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_template_id UUID;
+  v_ex          JSONB;
+  v_ex_id       UUID;
+BEGIN
+  IF NOT is_active_coach(p_club_id) THEN
+    RAISE EXCEPTION 'Unauthorized: not an active coach in this club';
+  END IF;
+
+  IF p_name IS NULL OR trim(p_name) = '' THEN
+    RAISE EXCEPTION 'Validation error: workout template name cannot be blank';
+  END IF;
+
+  IF p_template_id IS NOT NULL THEN
+    UPDATE workout_templates
+    SET name = trim(p_name)
+    WHERE id      = p_template_id
+      AND club_id = p_club_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Workout template not found or does not belong to this club';
+    END IF;
+
+    v_template_id := p_template_id;
+
+    -- Clear existing exercises and re-insert
+    DELETE FROM workout_template_exercises WHERE workout_template_id = v_template_id;
+  ELSE
+    INSERT INTO workout_templates (club_id, created_by_profile_id, name)
+    VALUES (p_club_id, auth.uid(), trim(p_name))
+    RETURNING id INTO v_template_id;
+  END IF;
+
+  -- Insert exercises
+  FOR v_ex IN SELECT * FROM jsonb_array_elements(p_exercises) LOOP
+    v_ex_id := (v_ex->>'exercise_id')::UUID;
+
+    -- Validate exercise scope
+    IF NOT EXISTS (
+      SELECT 1 FROM exercises
+      WHERE id = v_ex_id
+        AND (is_system_default = true OR club_id = p_club_id)
+    ) THEN
+      RAISE EXCEPTION 'Exercise % is not available to this club', v_ex_id;
+    END IF;
+
+    INSERT INTO workout_template_exercises (
+      workout_template_id,
+      exercise_id,
+      sort_order,
+      planned_sets,
+      planned_reps,
+      planned_load_value
+    ) VALUES (
+      v_template_id,
+      v_ex_id,
+      (v_ex->>'sort_order')::INT,
+      (v_ex->>'planned_sets')::INT,
+      (v_ex->>'planned_reps')::INT,
+      (v_ex->>'planned_load_value')::NUMERIC
+    );
+  END LOOP;
+
+  RETURN v_template_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION save_workout_template(UUID, UUID, TEXT, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION save_workout_template(UUID, UUID, TEXT, JSONB) TO authenticated;
+
+-- ============================================================
+-- RPC: archive_program_template
+-- Soft-deletes a program template by setting is_archived = true.
+-- Does not delete data — existing assignments are unaffected.
+-- ============================================================
+CREATE OR REPLACE FUNCTION archive_program_template(
+  p_club_id     UUID,
+  p_template_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT is_active_coach(p_club_id) THEN
+    RAISE EXCEPTION 'Unauthorized';
+  END IF;
+
+  UPDATE program_templates
+  SET is_archived = true
+  WHERE id      = p_template_id
+    AND club_id = p_club_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Program template not found';
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION archive_program_template(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION archive_program_template(UUID, UUID) TO authenticated;
