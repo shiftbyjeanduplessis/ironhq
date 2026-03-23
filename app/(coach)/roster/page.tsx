@@ -1,78 +1,45 @@
-// app/(coach)/roster/page.tsx
-// Server component.
-// Fetches compliance data from coach_roster_compliance view.
-// Scoped to the active club via URL param.
+import { Shell } from '@/components/shell';
+import { TableCard } from '@/components/table-card';
+import { athletes } from '@/lib/mock-data';
 
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
-import RosterClient from '@/components/roster/RosterClient'
-import ClubContextSwitcher from '@/components/architect/ClubContextSwitcher'
-
-export default async function RosterPage({
-  searchParams,
-}: {
-  searchParams: { clubId?: string }
-}) {
-  const cookieStore = cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: { get(name) { return cookieStore.get(name)?.value } },
-    }
-  )
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  // Get coach's active clubs
-  const { data: memberships } = await supabase
-    .from('club_memberships')
-    .select('club_id, role, clubs(id, name)')
-    .eq('profile_id', user.id)
-    .in('role', ['coach', 'assistant_coach', 'manager'])
-    .eq('status', 'active')
-
-  if (!memberships || memberships.length === 0) {
-    return (
-      <div className="p-8 font-mono text-xs text-red-500 uppercase">
-        No active coaching context found.
-      </div>
-    )
-  }
-
-  const availableClubs = memberships.map((m) => ({
-    id: m.club_id,
-    name: (m.clubs as any)?.name ?? 'Unknown',
-    role: m.role,
-  }))
-
-  const activeClubId =
-    searchParams.clubId && availableClubs.some((c) => c.id === searchParams.clubId)
-      ? searchParams.clubId
-      : availableClubs[0].id
-
-  // Fetch roster compliance for active club
-  const { data: roster } = await supabase
-    .from('coach_roster_compliance')
-    .select('*')
-    .eq('club_id', activeClubId)
-    .order('athlete_name', { ascending: true })
-
+export default function RosterPage() {
   return (
-    <div className="h-screen w-full bg-zinc-950 text-zinc-50 flex flex-col font-sans overflow-hidden">
-      <header className="h-12 shrink-0 border-b border-zinc-800 bg-zinc-950 flex items-center justify-between px-4">
-        <span className="text-xs font-bold tracking-tighter uppercase text-zinc-100">
-          IronHQ // Roster
-        </span>
-        <ClubContextSwitcher activeClubId={activeClubId} clubs={availableClubs} />
-      </header>
-
-      <RosterClient
-        roster={roster ?? []}
-        activeClubId={activeClubId}
-      />
-    </div>
-  )
+    <Shell
+      currentPath="/roster"
+      title="Roster"
+      subtitle="A clean roster surface that can later be wired to Supabase queries and visibility controls."
+    >
+      <TableCard
+        title="Athletes"
+        description="This table is intentionally simple so you can reintroduce permissions and filters without hidden complexity."
+      >
+        <table className="min-w-full text-left text-sm">
+          <thead className="border-b border-line text-slate-400">
+            <tr>
+              <th className="px-5 py-3 font-medium">Name</th>
+              <th className="px-5 py-3 font-medium">Sport</th>
+              <th className="px-5 py-3 font-medium">Coach</th>
+              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium">Adherence</th>
+              <th className="px-5 py-3 font-medium">Next session</th>
+            </tr>
+          </thead>
+          <tbody>
+            {athletes.map((athlete) => (
+              <tr key={athlete.id} className="border-b border-line/60 last:border-b-0">
+                <td className="px-5 py-4 font-medium text-white">{athlete.name}</td>
+                <td className="px-5 py-4 text-slate-300">{athlete.sport}</td>
+                <td className="px-5 py-4 text-slate-300">{athlete.coach}</td>
+                <td className="px-5 py-4">
+                  <span className="badge">{athlete.status}</span>
+                </td>
+                <td className="px-5 py-4 text-slate-300">{athlete.adherence}%</td>
+                <td className="px-5 py-4 text-slate-300">{athlete.nextSession}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableCard>
+    </Shell>
+  );
 }
